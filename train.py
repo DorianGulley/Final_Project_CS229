@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--use-local", default=None, help="Use existing dataset directory (skip download).")
     p.add_argument("--force-download", action="store_true", help="Force re-download (ignored with --use-local).")
     p.add_argument("--cache-dir", default=None, help="Optional kagglehub cache root.")
+    p.add_argument("--quick", action="store_true", help="Load only Dec 27, 2020 data (~1GB) for faster iteration.")
 
     # Feature options
     p.add_argument(
@@ -84,6 +85,7 @@ def main(args: argparse.Namespace) -> None:
         use_local=args.use_local,
         force_download=args.force_download,
         cache_dir=args.cache_dir,
+        quick=args.quick,
     )
 
     # 2) Build features (maps → splits → blocks → standardize → assemble)
