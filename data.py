@@ -55,6 +55,15 @@ QUICK_BATTLES_FILE = "battlesStaging_12272020_WL_tagged.csv"
 # Card master list
 DEFAULT_CARDS_FILE = "CardMasterListSeason18_12082020.csv"
 
+# Columns we actually need (only 18 out of 50+)
+REQUIRED_COLUMNS = [
+    "winner.card1.id", "winner.card2.id", "winner.card3.id", "winner.card4.id",
+    "winner.card5.id", "winner.card6.id", "winner.card7.id", "winner.card8.id",
+    "loser.card1.id", "loser.card2.id", "loser.card3.id", "loser.card4.id",
+    "loser.card5.id", "loser.card6.id", "loser.card7.id", "loser.card8.id",
+    "winner.startingTrophies", "loser.startingTrophies",
+]
+
 # --------------------------------------------------------------------------------------
 # Data structures
 # --------------------------------------------------------------------------------------
@@ -212,6 +221,9 @@ def load_raw(
     paths: DatasetPaths,
     *,
     low_memory: bool = True,
+    sample: Optional[float] = None,
+    random_state: int = 42,
+    only_required_cols: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Load the raw CSVs into DataFrames.
 
@@ -225,6 +237,14 @@ def load_raw(
     low_memory : bool
         Passed through to pandas.read_csv for the battles CSV. Set False if you
         see dtype warnings and prefer a second pass.
+    sample : Optional[float]
+        If provided, sample this fraction of each CSV during loading.
+        This reduces peak memory usage compared to sampling after loading.
+    random_state : int
+        Random seed for reproducible sampling.
+    only_required_cols : bool
+        If True (default), only load the 18 columns needed for feature building.
+        This significantly speeds up loading and reduces memory usage.
 
     Returns
     -------
@@ -237,15 +257,33 @@ def load_raw(
             f"Expected CSVs not found.\n  battles: {paths.battles_csvs}\n  cards: {paths.cards_csv}"
         )
 
+    # Optimize loading by only reading needed columns
+    usecols = REQUIRED_COLUMNS if only_required_cols else None
+    
+    # Specify dtypes for faster parsing (card IDs are ints, trophies are ints)
+    dtype = {col: "int32" for col in REQUIRED_COLUMNS} if only_required_cols else None
+
     # Load and concatenate all battle files
-    print(f"\nLoading {len(paths.battles_csvs)} battle file(s)...")
+    sample_msg = f" (sampling {sample:.0%} of each)" if sample else ""
+    cols_msg = f", {len(REQUIRED_COLUMNS)} cols" if only_required_cols else ""
+    print(f"\nLoading {len(paths.battles_csvs)} battle file(s){sample_msg}{cols_msg}...")
     dfs = []
-    total_rows = 0
+    total_rows_original = 0
+    total_rows_sampled = 0
     for csv_path in paths.battles_csvs:
-        print(f"  Loading: {csv_path.name}", end="")
-        df = pd.read_csv(csv_path, low_memory=low_memory)
-        print(f" — {len(df):,} rows")
-        total_rows += len(df)
+        print(f"  Loading: {csv_path.name}", end="", flush=True)
+        df = pd.read_csv(csv_path, low_memory=low_memory, usecols=usecols, dtype=dtype)
+        original_len = len(df)
+        total_rows_original += original_len
+        
+        # Sample immediately to reduce memory
+        if sample is not None and 0 < sample < 1:
+            df = df.sample(frac=sample, random_state=random_state)
+            print(f" — {original_len:,} → {len(df):,}")
+        else:
+            print(f" — {len(df):,}")
+        
+        total_rows_sampled += len(df)
         dfs.append(df)
     
     if len(dfs) == 1:
@@ -253,7 +291,10 @@ def load_raw(
     else:
         battles_df = pd.concat(dfs, ignore_index=True)
     
-    print(f"Total battles: {len(battles_df):,} rows")
+    if sample:
+        print(f"Total: {total_rows_original:,} → {len(battles_df):,} rows ({sample:.0%} sampled)")
+    else:
+        print(f"Total battles: {len(battles_df):,} rows")
 
     print(f"\nLoading: {paths.cards_csv.name}")
     cards = pd.read_csv(paths.cards_csv)
@@ -273,6 +314,8 @@ def get_raw_data(
     cache_dir: Optional[str] = None,
     low_memory: bool = True,
     quick: bool = False,
+    sample: Optional[float] = None,
+    random_state: int = 42,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, DatasetPaths]:
     """Obtain raw DataFrames and resolved paths, downloading if needed.
 
@@ -294,6 +337,11 @@ def get_raw_data(
     quick : bool
         If True, only load Dec 27, 2020 data (~1GB) for faster iteration.
         If False (default), load ALL battle files (~21GB).
+    sample : Optional[float]
+        If provided (e.g., 0.5 for 50%), sample each CSV during loading.
+        This reduces peak memory usage significantly.
+    random_state : int
+        Random seed for reproducible sampling.
 
     Returns
     -------
@@ -326,7 +374,7 @@ def get_raw_data(
             "appropriate directory."
         )
 
-    battles_df, cards = load_raw(paths, low_memory=low_memory)
+    battles_df, cards = load_raw(paths, low_memory=low_memory, sample=sample, random_state=random_state)
 
     # Optional: echo columns for quick inspection (comment out if too verbose)
     print("\nColumns (cards):")

@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--force-download", action="store_true", help="Force re-download (ignored with --use-local).")
     p.add_argument("--cache-dir", default=None, help="Optional kagglehub cache root.")
     p.add_argument("--quick", action="store_true", help="Load only Dec 27, 2020 data (~1GB) for faster iteration.")
+    p.add_argument("--sample", type=float, default=None, help="Randomly sample this fraction of data (e.g., 0.1 for 10%%).")
 
     # Feature options
     p.add_argument(
@@ -60,13 +61,14 @@ def parse_args() -> argparse.Namespace:
 
     # Model options
     p.add_argument("--model", default="logreg", help="Model name (default 'logreg').")
-    p.add_argument("--C", type=float, default=1.0, help="LogReg inverse regularization strength.")
+    p.add_argument("--C", type=float, default=100.0, help="LogReg inverse regularization strength.")
     p.add_argument("--max-iter", type=int, default=400, help="LogReg max iterations.")
     p.add_argument("--verbose", type=int, default=1, help="LogReg verbosity level.")
 
     # Run options
     p.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     p.add_argument("--save", default=None, help="Optional path to save metrics as JSON.")
+    p.add_argument("--eval-test", action="store_true", help="Evaluate on test set (only use for FINAL evaluation).")
 
     return p.parse_args()
 
@@ -79,13 +81,17 @@ def main(args: argparse.Namespace) -> None:
     # Seed
     np.random.seed(args.seed)
 
-    # 1) Load raw data
+    import gc
+    
+    # 1) Load raw data (sampling happens during loading to reduce peak memory)
     daydf, cards, paths = get_raw_data(
         handle=args.handle,
         use_local=args.use_local,
         force_download=args.force_download,
         cache_dir=args.cache_dir,
         quick=args.quick,
+        sample=args.sample,
+        random_state=args.seed,
     )
 
     # 2) Build features (maps → splits → blocks → standardize → assemble)
@@ -97,6 +103,10 @@ def main(args: argparse.Namespace) -> None:
         val_frac=args.val_frac,
         use_blocks=use_blocks,
     )
+    
+    # Free the raw DataFrame - we only need the sparse matrices now
+    del daydf, cards
+    gc.collect()
 
     print("\nShapes:")
     print("  Train:", ds.X_train.shape, ds.y_train.shape)
@@ -139,17 +149,24 @@ def main(args: argparse.Namespace) -> None:
     # 4) Fit on TRAIN
     model.fit(ds.X_train, ds.y_train)
 
-    # 5) Evaluate on VAL
+    # 5) Evaluate on TRAIN and VAL
+    print("\n=== Train Metrics ===")
+    p_train = model.predict_proba(ds.X_train)[:, 1]
+    metrics_train = evaluate(ds.y_train, p_train)
+    pretty_print(metrics_train)
+
+    print("\n=== Validation Metrics ===")
     p_val = model.predict_proba(ds.X_val)[:, 1]
     metrics_val = evaluate(ds.y_val, p_val)
-    from metrics import pretty_print as _pp
-    _pp(metrics_val)
+    pretty_print(metrics_val)
 
-    # Optional: also report TEST (keep VAL as the model-selection target)
-    p_test = model.predict_proba(ds.X_test)[:, 1]
-    metrics_test = evaluate(ds.y_test, p_test)
-    print("\n=== Test (for reference only) ===")
-    pretty_print(metrics_test)
+    # Only evaluate on TEST if explicitly requested (should only be done at the very end)
+    metrics_test = None
+    if args.eval_test:
+        p_test = model.predict_proba(ds.X_test)[:, 1]
+        metrics_test = evaluate(ds.y_test, p_test)
+        print("\n=== Test (FINAL EVALUATION) ===")
+        pretty_print(metrics_test)
 
     # 6) Save metrics (optional)
     if args.save:
@@ -166,9 +183,11 @@ def main(args: argparse.Namespace) -> None:
             "features": list(use_blocks),
             "split": {"train_frac": args.train_frac, "val_frac": args.val_frac},
             "dataset_root": str(paths.base_dir),
-            "metrics": {"val": metrics_val, "test": metrics_test},
+            "metrics": {"train": metrics_train, "val": metrics_val},
             "seed": int(args.seed),
         }
+        if metrics_test is not None:
+            payload["metrics"]["test"] = metrics_test
         with out.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         print(f"\nSaved metrics → {out}")

@@ -171,23 +171,24 @@ def make_splits(daydf: pd.DataFrame, *, train_frac: float = 0.70, val_frac: floa
 # Core feature construction per split
 # --------------------------------------------------------------------------------------
 
-def build_split(split_df: pd.DataFrame, maps: FeatureMaps, win_cols: Sequence[str], los_cols: Sequence[str]) -> SplitBlocks:
-    """Convert a slice of the battle log into sparse blocks and labels.
+# Default chunk size for memory-efficient processing
+DEFAULT_CHUNK_SIZE = 500_000  # Process 500K battles at a time
 
-    For each original match, emits two rows:
-      - Row A: winner deck vs loser deck → y=1, Δ = tW - tL
-      - Row B: loser  deck vs winner deck → y=0, Δ = tL - tW
 
-    Features are anti-symmetric so flipping A/B flips the sign, enabling models
-    without an intercept to learn relative effects.
+def _build_chunk(
+    W: np.ndarray,
+    L: np.ndarray,
+    tW: np.ndarray,
+    tL: np.ndarray,
+    maps: FeatureMaps,
+) -> Tuple[sp.csr_matrix, sp.csr_matrix, np.ndarray, np.ndarray]:
+    """Build sparse matrices for a single chunk of data.
+    
+    Returns (X_deck, X_ab, delta, y) for this chunk.
     """
     D, P = maps.D, maps.P
-
-    # Pull arrays
-    W = split_df[list(win_cols)].to_numpy(dtype=int, copy=False)
-    L = split_df[list(los_cols)].to_numpy(dtype=int, copy=False)
-    tW = split_df["winner.startingTrophies"].to_numpy(dtype=float, copy=False)
-    tL = split_df["loser.startingTrophies"].to_numpy(dtype=float, copy=False)
+    n_battles = len(W)
+    n_rows = n_battles * 2  # Anti-symmetric: 2 rows per battle
 
     # Sparse scaffolding
     deck_data: List[int] = []
@@ -205,17 +206,14 @@ def build_split(split_df: pd.DataFrame, maps: FeatureMaps, win_cols: Sequence[st
 
     def add_example(r_idx: int, A_ids: Iterable[int], B_ids: Iterable[int], delta: float, y: int) -> None:
         """Emit one anti-symmetric example row (A vs B)."""
-        # Map to deck-column indices; ensure uniqueness within a deck
         A = sorted({maps.card_to_col[int(cid)] for cid in A_ids if int(cid) in maps.card_to_col})
         B = sorted({maps.card_to_col[int(cid)] for cid in B_ids if int(cid) in maps.card_to_col})
 
-        # Deck block (A − B)
         for c in A:
             deck_rows.append(r_idx); deck_cols.append(c); deck_data.append(+1)
         for c in B:
             deck_rows.append(r_idx); deck_cols.append(c); deck_data.append(-1)
 
-        # Pairwise block (anti-symmetric counters)
         for i in A:
             for j in B:
                 if i == j:
@@ -230,13 +228,12 @@ def build_split(split_df: pd.DataFrame, maps: FeatureMaps, win_cols: Sequence[st
         deltas.append(float(delta))
         labels.append(int(y))
 
-    # Emit two rows per original match
-    n_rows = len(split_df)
-    for j in range(n_rows):
+    # Emit two rows per battle
+    for j in range(n_battles):
         add_example(r, W[j], L[j], tW[j] - tL[j], 1); r += 1
         add_example(r, L[j], W[j], tL[j] - tW[j], 0); r += 1
 
-    # Build CSR matrices
+    # Build CSR matrices for this chunk
     X_deck = sp.csr_matrix(
         (np.asarray(deck_data, dtype=np.int8),
          (np.asarray(deck_rows, dtype=np.int64), np.asarray(deck_cols, dtype=np.int64))),
@@ -250,7 +247,87 @@ def build_split(split_df: pd.DataFrame, maps: FeatureMaps, win_cols: Sequence[st
     delta = np.asarray(deltas, dtype=np.float32).reshape(-1, 1)
     y = np.asarray(labels, dtype=np.int8)
 
-    return SplitBlocks(X_deck=X_deck, X_ab=X_ab, delta=delta, y=y)
+    return X_deck, X_ab, delta, y
+
+
+def _build_split_from_arrays(
+    W_all: np.ndarray,
+    L_all: np.ndarray,
+    tW_all: np.ndarray,
+    tL_all: np.ndarray,
+    maps: FeatureMaps,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> SplitBlocks:
+    """Build sparse blocks from pre-extracted numpy arrays.
+    
+    Uses chunked processing to reduce peak memory usage.
+    """
+    n_total = len(W_all)
+
+    # Process in chunks to limit memory usage
+    deck_chunks: List[sp.csr_matrix] = []
+    ab_chunks: List[sp.csr_matrix] = []
+    delta_chunks: List[np.ndarray] = []
+    y_chunks: List[np.ndarray] = []
+
+    n_chunks = (n_total + chunk_size - 1) // chunk_size
+    
+    for i in range(0, n_total, chunk_size):
+        end = min(i + chunk_size, n_total)
+        chunk_num = i // chunk_size + 1
+        
+        if n_chunks > 1:
+            print(f"    chunk {chunk_num}/{n_chunks} ({i:,}-{end:,})", flush=True)
+        
+        X_deck, X_ab, delta, y = _build_chunk(
+            W_all[i:end], L_all[i:end], tW_all[i:end], tL_all[i:end], maps
+        )
+        
+        deck_chunks.append(X_deck)
+        ab_chunks.append(X_ab)
+        delta_chunks.append(delta)
+        y_chunks.append(y)
+
+    # Stack all chunks vertically
+    if len(deck_chunks) == 1:
+        X_deck_final = deck_chunks[0]
+        X_ab_final = ab_chunks[0]
+        delta_final = delta_chunks[0]
+        y_final = y_chunks[0]
+    else:
+        X_deck_final = sp.vstack(deck_chunks, format="csr")
+        X_ab_final = sp.vstack(ab_chunks, format="csr")
+        delta_final = np.vstack(delta_chunks)
+        y_final = np.concatenate(y_chunks)
+
+    return SplitBlocks(X_deck=X_deck_final, X_ab=X_ab_final, delta=delta_final, y=y_final)
+
+
+def build_split(
+    split_df: pd.DataFrame,
+    maps: FeatureMaps,
+    win_cols: Sequence[str],
+    los_cols: Sequence[str],
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> SplitBlocks:
+    """Convert a slice of the battle log into sparse blocks and labels.
+
+    For each original match, emits two rows:
+      - Row A: winner deck vs loser deck → y=1, Δ = tW - tL
+      - Row B: loser  deck vs winner deck → y=0, Δ = tL - tW
+
+    Features are anti-symmetric so flipping A/B flips the sign, enabling models
+    without an intercept to learn relative effects.
+    
+    Uses chunked processing to reduce peak memory usage.
+    """
+    # Pull arrays once
+    W_all = split_df[list(win_cols)].to_numpy(dtype=np.int32)
+    L_all = split_df[list(los_cols)].to_numpy(dtype=np.int32)
+    tW_all = split_df["winner.startingTrophies"].to_numpy(dtype=np.float32)
+    tL_all = split_df["loser.startingTrophies"].to_numpy(dtype=np.float32)
+
+    return _build_split_from_arrays(W_all, L_all, tW_all, tL_all, maps, chunk_size)
 
 
 # --------------------------------------------------------------------------------------
@@ -296,16 +373,57 @@ def build_all_features(
     train_frac: float = 0.70,
     val_frac: float = 0.15,
     use_blocks: Sequence[str] = ("deck", "ab", "delta"),
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> AssembledDataset:
     """End-to-end feature build: maps → splits → blocks → standardize → assemble."""
+    import gc
+    
     maps = build_feature_maps(cards_df, card_id_col=card_id_col)
     win_cols, los_cols = make_win_los_columns()
 
+    # Extract numpy arrays for each split, then delete DataFrame to free memory
+    print("\nExtracting data arrays...")
     train_df, val_df, test_df = make_splits(daydf, train_frac=train_frac, val_frac=val_frac)
+    
+    # Pre-extract all arrays before deleting DataFrame
+    train_data = (
+        train_df[list(win_cols)].to_numpy(dtype=np.int32),
+        train_df[list(los_cols)].to_numpy(dtype=np.int32),
+        train_df["winner.startingTrophies"].to_numpy(dtype=np.float32),
+        train_df["loser.startingTrophies"].to_numpy(dtype=np.float32),
+    )
+    val_data = (
+        val_df[list(win_cols)].to_numpy(dtype=np.int32),
+        val_df[list(los_cols)].to_numpy(dtype=np.int32),
+        val_df["winner.startingTrophies"].to_numpy(dtype=np.float32),
+        val_df["loser.startingTrophies"].to_numpy(dtype=np.float32),
+    )
+    test_data = (
+        test_df[list(win_cols)].to_numpy(dtype=np.int32),
+        test_df[list(los_cols)].to_numpy(dtype=np.int32),
+        test_df["winner.startingTrophies"].to_numpy(dtype=np.float32),
+        test_df["loser.startingTrophies"].to_numpy(dtype=np.float32),
+    )
+    
+    n_train, n_val, n_test = len(train_df), len(val_df), len(test_df)
+    
+    # Free the DataFrame memory
+    del daydf, train_df, val_df, test_df
+    gc.collect()
+    print("  DataFrame freed, building sparse features...")
 
-    blocks_train = build_split(train_df, maps, win_cols, los_cols)
-    blocks_val = build_split(val_df, maps, win_cols, los_cols)
-    blocks_test = build_split(test_df, maps, win_cols, los_cols)
+    print(f"\nBuilding features (chunk_size={chunk_size:,})...")
+    print(f"  Train split ({n_train:,} battles)...")
+    blocks_train = _build_split_from_arrays(*train_data, maps, chunk_size=chunk_size)
+    del train_data; gc.collect()
+    
+    print(f"  Val split ({n_val:,} battles)...")
+    blocks_val = _build_split_from_arrays(*val_data, maps, chunk_size=chunk_size)
+    del val_data; gc.collect()
+    
+    print(f"  Test split ({n_test:,} battles)...")
+    blocks_test = _build_split_from_arrays(*test_data, maps, chunk_size=chunk_size)
+    del test_data; gc.collect()
 
     dtr_std, dva_std, dte_std, stats = standardize_delta(blocks_train.delta, blocks_val.delta, blocks_test.delta)
 
