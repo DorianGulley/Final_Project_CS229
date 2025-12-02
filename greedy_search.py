@@ -4,6 +4,8 @@
 # Usage:
 #   python greedy_search.py --quick --target-rank 4    # X-Bow is rank 4
 #   python greedy_search.py --quick --lambda 0.6       # Different lambda
+#   python greedy_search.py --quick --elixir-cap 4.0   # Limit average elixir
+#   python greedy_search.py --quick --random-start     # Random start from top 20
 
 from __future__ import annotations
 
@@ -20,6 +22,52 @@ import scipy.sparse as sp
 from data import get_raw_data
 from features import build_feature_maps, build_all_features, FeatureMaps
 from models import get_model
+
+
+# --------------------------------------------------------------------------------------
+# Elixir costs for Clash Royale Season 18 cards (by card name)
+# --------------------------------------------------------------------------------------
+
+ELIXIR_COSTS: Dict[str, int] = {
+    # Troops
+    "Knight": 3, "Archers": 3, "Goblins": 2, "Giant": 5, "P.E.K.K.A": 7,
+    "Minions": 3, "Balloon": 5, "Witch": 5, "Barbarians": 5, "Golem": 8,
+    "Skeletons": 1, "Valkyrie": 4, "Skeleton Army": 3, "Bomber": 2, "Musketeer": 4,
+    "Baby Dragon": 4, "Prince": 5, "Wizard": 5, "Mini P.E.K.K.A": 4, "Spear Goblins": 2,
+    "Giant Skeleton": 6, "Hog Rider": 4, "Minion Horde": 5, "Ice Wizard": 3,
+    "Royal Giant": 6, "Guards": 3, "Princess": 3, "Dark Prince": 4,
+    "Three Musketeers": 9, "Lava Hound": 7, "Ice Spirit": 1, "Fire Spirit": 1,
+    "Miner": 3, "Sparky": 6, "Bowler": 5, "Lumberjack": 4, "Inferno Dragon": 4,
+    "Ice Golem": 2, "Mega Minion": 3, "Dart Goblin": 3, "Goblin Gang": 3,
+    "Electro Wizard": 4, "Elite Barbarians": 6, "Hunter": 4, "Executioner": 5,
+    "Bandit": 3, "Royal Recruits": 7, "Night Witch": 4, "Bats": 2,
+    "Royal Ghost": 3, "Ram Rider": 5, "Zappies": 4, "Rascals": 5,
+    "Cannon Cart": 5, "Mega Knight": 7, "Skeleton Barrel": 3, "Flying Machine": 4,
+    "Wall Breakers": 2, "Royal Hogs": 5, "Goblin Giant": 6, "Fisherman": 3,
+    "Magic Archer": 4, "Electro Dragon": 5, "Firecracker": 3, "Elixir Golem": 3,
+    "Battle Healer": 4, "Skeleton Dragons": 4, "Mother Witch": 4,
+    "Electro Spirit": 1, "Electro Giant": 8,
+    # Buildings
+    "Cannon": 3, "Goblin Hut": 5, "Mortar": 4, "Inferno Tower": 5,
+    "Bomb Tower": 4, "Barbarian Hut": 7, "Elixir Collector": 6, "X-Bow": 6,
+    "Tombstone": 3, "Furnace": 4, "Goblin Cage": 4, "Goblin Drill": 4, "Tesla": 4,
+    # Spells
+    "Fireball": 4, "Arrows": 3, "Rage": 2, "Rocket": 6, "Goblin Barrel": 3,
+    "Freeze": 4, "Mirror": 1, "Lightning": 6, "Zap": 2, "Poison": 4,
+    "Graveyard": 5, "The Log": 2, "Tornado": 3, "Clone": 3, "Earthquake": 3,
+    "Barbarian Barrel": 2, "Heal Spirit": 1, "Giant Snowball": 2, "Royal Delivery": 3,
+}
+
+
+def get_elixir_cost(card_name: str) -> int:
+    """Get elixir cost for a card by name. Returns 4 (average) if unknown."""
+    return ELIXIR_COSTS.get(card_name, 4)
+
+
+def compute_avg_elixir(deck: Tuple[int, ...], id_to_name: Dict[int, str]) -> float:
+    """Compute average elixir cost of a deck."""
+    costs = [get_elixir_cost(id_to_name.get(cid, "Unknown")) for cid in deck]
+    return sum(costs) / len(costs)
 
 
 # --------------------------------------------------------------------------------------
@@ -153,8 +201,13 @@ def score_deck(
 def generate_neighbors(
     deck: Tuple[int, ...],
     all_card_ids: List[int],
+    id_to_name: Optional[Dict[int, str]] = None,
+    elixir_cap: Optional[float] = None,
 ) -> List[Tuple[int, ...]]:
-    """Generate all single-card swap neighbors of a deck."""
+    """Generate all single-card swap neighbors of a deck.
+    
+    If elixir_cap is provided, only returns neighbors with avg elixir <= cap.
+    """
     neighbors = []
     deck_set = set(deck)
     
@@ -163,7 +216,15 @@ def generate_neighbors(
             if new_card not in deck_set:  # No duplicates
                 new_deck = list(deck)
                 new_deck[i] = new_card
-                neighbors.append(tuple(sorted(new_deck)))
+                new_deck_tuple = tuple(sorted(new_deck))
+                
+                # Check elixir cap if specified
+                if elixir_cap is not None and id_to_name is not None:
+                    avg_elixir = compute_avg_elixir(new_deck_tuple, id_to_name)
+                    if avg_elixir > elixir_cap:
+                        continue
+                
+                neighbors.append(new_deck_tuple)
     
     # Remove duplicates (different swaps might produce same deck)
     return list(set(neighbors))
@@ -197,6 +258,8 @@ def hill_climb(
     max_iter: int = 50,
     verbose: bool = True,
     use_blocks: List[str] = ["deck", "ab", "delta"],
+    id_to_name: Optional[Dict[int, str]] = None,
+    elixir_cap: Optional[float] = None,
 ) -> HillClimbResult:
     """Run hill climbing to find a local optimum counter-deck."""
     
@@ -209,7 +272,7 @@ def hill_climb(
     path = [current]
     
     for iteration in range(max_iter):
-        neighbors = generate_neighbors(current, all_card_ids)
+        neighbors = generate_neighbors(current, all_card_ids, id_to_name, elixir_cap)
         
         if verbose:
             print(f"  Iter {iteration + 1}: score={current_score:.4f} (p={current_p:.3f}, R={current_r:.3f}), {len(neighbors)} neighbors")
@@ -270,6 +333,8 @@ def main():
     parser.add_argument("--lambda2", type=float, default=0.6, help="Second lambda to compare")
     parser.add_argument("--max-iter", type=int, default=50, help="Max hill climbing iterations")
     parser.add_argument("--start-rank", type=int, default=1, help="Rank of starting deck (1=most popular)")
+    parser.add_argument("--random-start", action="store_true", help="Random start from top 20 decks")
+    parser.add_argument("--elixir-cap", type=float, default=None, help="Max average elixir (e.g., 4.0)")
     parser.add_argument("--C", type=float, default=1.0, help="LogReg regularization")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
@@ -313,11 +378,25 @@ def main():
         print(f"  {i}. {deck_to_names(m, id_to_name)[:60]}...")
     
     # Starting deck
-    start_deck = top_decks[args.start_rank - 1][0]
-    if start_deck == target_deck:
-        start_deck = top_decks[args.start_rank][0]  # Skip if same as target
-    start_name = deck_to_names(start_deck, id_to_name)
-    print(f"\nStarting deck (rank {args.start_rank}): {start_name}")
+    if args.random_start:
+        # Pick random deck from top 20 (excluding target)
+        candidates = [d for d, _ in top_decks[:20] if d != target_deck]
+        start_deck = random.choice(candidates)
+        start_name = deck_to_names(start_deck, id_to_name)
+        start_elixir = compute_avg_elixir(start_deck, id_to_name)
+        print(f"\nStarting deck (random from top 20): {start_name}")
+        print(f"  Average elixir: {start_elixir:.2f}")
+    else:
+        start_deck = top_decks[args.start_rank - 1][0]
+        if start_deck == target_deck:
+            start_deck = top_decks[args.start_rank][0]  # Skip if same as target
+        start_name = deck_to_names(start_deck, id_to_name)
+        start_elixir = compute_avg_elixir(start_deck, id_to_name)
+        print(f"\nStarting deck (rank {args.start_rank}): {start_name}")
+        print(f"  Average elixir: {start_elixir:.2f}")
+    
+    if args.elixir_cap:
+        print(f"\nElixir cap: {args.elixir_cap:.1f} (neighbors with avg > {args.elixir_cap:.1f} will be filtered)")
     
     # --- 3) Build feature maps and train model ---
     print(f"\n{'=' * 70}")
@@ -356,14 +435,18 @@ def main():
             max_iter=args.max_iter,
             verbose=True,
             use_blocks=use_blocks,
+            id_to_name=id_to_name,
+            elixir_cap=args.elixir_cap,
         )
         results[lam] = result
         
+        final_elixir = compute_avg_elixir(result.final_deck, id_to_name)
         print(f"\n--- RESULT (λ = {lam}) ---")
         print(f"Iterations: {result.iterations}")
         print(f"Score: {result.start_score:.4f} → {result.final_score:.4f}")
         print(f"P(beats target): {result.final_p_vs_target:.1%}")
         print(f"Robustness R(D): {result.final_robustness:.1%}")
+        print(f"Avg elixir: {final_elixir:.2f}")
         print(f"\nFinal deck:")
         print(f"  {deck_to_names(result.final_deck, id_to_name)}")
     
@@ -372,11 +455,12 @@ def main():
     print("COMPARISON")
     print("=" * 70)
     
-    print(f"\n{'λ':>6} {'Iters':>6} {'Score':>8} {'P(beat)':>8} {'R(D)':>8}")
-    print("-" * 50)
+    print(f"\n{'λ':>6} {'Iters':>6} {'Score':>8} {'P(beat)':>8} {'R(D)':>8} {'Elixir':>8}")
+    print("-" * 60)
     for lam in lambdas:
         r = results[lam]
-        print(f"{lam:>6.1f} {r.iterations:>6} {r.final_score:>8.4f} {r.final_p_vs_target:>7.1%} {r.final_robustness:>7.1%}")
+        elixir = compute_avg_elixir(r.final_deck, id_to_name)
+        print(f"{lam:>6.1f} {r.iterations:>6} {r.final_score:>8.4f} {r.final_p_vs_target:>7.1%} {r.final_robustness:>7.1%} {elixir:>7.2f}")
     
     # Show what cards changed
     print(f"\n{'=' * 70}")
