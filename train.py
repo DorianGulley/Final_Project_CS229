@@ -10,7 +10,8 @@
 # Usage (examples)
 #   python train.py                          # default: model=logreg, blocks=[deck,ab,delta]
 #   python train.py --model logreg --use-local /path/to/dataset/root
-#   python train.py --blocks deck ab         # ablation: deck-only
+#   python train.py --blocks deck ab         # ablation: deck-only (no delta/levels)
+#   python train.py --blocks deck ab delta levels  # include card level difference
 #   python train.py --save reports/run1.json # persist metrics
 #   python train.py --show-counters 20       # show top 20 card counter matchups
 #   python train.py --save-counters counters.csv  # save all counter matchups to CSV
@@ -154,7 +155,7 @@ def parse_args() -> argparse.Namespace:
         "--blocks",
         nargs="*",
         default=["deck", "ab", "delta"],
-        help="Feature blocks to include (subset/order of: deck ab delta).",
+        help="Feature blocks to include (subset/order of: deck ab delta levels).",
     )
     p.add_argument("--train-frac", type=float, default=0.70, help="Train fraction (default 0.70).")
     p.add_argument("--val-frac", type=float, default=0.15, help="Validation fraction (default 0.15).")

@@ -55,13 +55,15 @@ QUICK_BATTLES_FILE = "battlesStaging_12272020_WL_tagged.csv"
 # Card master list
 DEFAULT_CARDS_FILE = "CardMasterListSeason18_12082020.csv"
 
-# Columns we actually need (only 18 out of 50+)
+# Columns we actually need (extended to include levels)
 REQUIRED_COLUMNS = [
     "winner.card1.id", "winner.card2.id", "winner.card3.id", "winner.card4.id",
     "winner.card5.id", "winner.card6.id", "winner.card7.id", "winner.card8.id",
     "loser.card1.id", "loser.card2.id", "loser.card3.id", "loser.card4.id",
     "loser.card5.id", "loser.card6.id", "loser.card7.id", "loser.card8.id",
     "winner.startingTrophies", "loser.startingTrophies",
+    # Card levels (total sum of all 8 card levels per player)
+    "winner.totalcard.level", "loser.totalcard.level",
 ]
 
 # --------------------------------------------------------------------------------------
