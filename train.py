@@ -31,6 +31,7 @@ from data import get_raw_data, DEFAULT_HANDLE
 from features import build_all_features
 from models import get_model
 from metrics import evaluate, pretty_print
+from cloud_utils import upload_json
 
 
 # --------------------------------------------------------------------------------------
@@ -48,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cache-dir", default=None, help="Optional kagglehub cache root.")
     p.add_argument("--quick", action="store_true", help="Load only Dec 27, 2020 data (~1GB) for faster iteration.")
     p.add_argument("--sample", type=float, default=None, help="Randomly sample this fraction of data (e.g., 0.1 for 10%%).")
+    p.add_argument("--gcs-direct", action="store_true", help="Read CSVs directly from GCS via gcsfs instead of downloading to a temp dir.")
 
     # Feature options
     p.add_argument(
@@ -92,6 +94,7 @@ def main(args: argparse.Namespace) -> None:
         quick=args.quick,
         sample=args.sample,
         random_state=args.seed,
+        gcs_direct=args.gcs_direct,
     )
 
     # 2) Build features (maps → splits → blocks → standardize → assemble)
@@ -170,8 +173,6 @@ def main(args: argparse.Namespace) -> None:
 
     # 6) Save metrics (optional)
     if args.save:
-        out = Path(args.save)
-        out.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "model": args.model,
             "params": {
@@ -188,9 +189,20 @@ def main(args: argparse.Namespace) -> None:
         }
         if metrics_test is not None:
             payload["metrics"]["test"] = metrics_test
-        with out.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-        print(f"\nSaved metrics → {out}")
+
+        # If the user requested a GCS URI, upload JSON directly to GCS.
+        if str(args.save).startswith("gs://"):
+            # Preserve original dataset URI if the run used a GCS source
+            if args.use_local and str(args.use_local).startswith("gs://"):
+                payload["dataset_uri"] = str(args.use_local)
+            upload_json(payload, str(args.save))
+            print(f"\nSaved metrics → {args.save}")
+        else:
+            out = Path(args.save)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with out.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            print(f"\nSaved metrics → {out}")
 
 
 if __name__ == "__main__":

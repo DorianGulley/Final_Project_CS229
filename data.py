@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Optional, Tuple, List
 
 import pandas as pd
+from urllib.parse import urlparse
 
 # Optional import: provide a helpful error message if missing
 try:
@@ -105,6 +106,20 @@ def _ensure_kagglehub_available() -> None:
             "kagglehub is not installed. Install with `pip install kagglehub` or use "
             "get_raw_data(use_local=...) to point at an existing dataset directory."
         )
+
+
+def _parse_gs_uri(gcs_uri: str) -> tuple[str, str]:
+    """Parse a `gs://` URI into (bucket, prefix).
+
+    Returns the bucket name and the prefix (without a leading slash). The prefix
+    may be empty when pointing at the bucket root.
+    """
+    p = urlparse(gcs_uri)
+    if p.scheme != "gs":
+        raise ValueError("Expect gs:// URI")
+    bucket = p.netloc
+    prefix = p.path.lstrip("/")
+    return bucket, prefix
 
 
 def dataset_download(
@@ -252,7 +267,10 @@ def load_raw(
         battles_df — per-battle records (chronologically ordered)
         cards      — card master list with card IDs and metadata
     """
-    if not paths.exists():
+    # If paths.cards_csv is a GCS URI (string), skip local exists checks —
+    # we'll rely on pandas/gcsfs or the cloud client to surface missing files.
+    cards_is_gs = isinstance(paths.cards_csv, str) and str(paths.cards_csv).startswith("gs://")
+    if not cards_is_gs and not paths.exists():
         raise FileNotFoundError(
             f"Expected CSVs not found.\n  battles: {paths.battles_csvs}\n  cards: {paths.cards_csv}"
         )
@@ -271,7 +289,8 @@ def load_raw(
     total_rows_original = 0
     total_rows_sampled = 0
     for csv_path in paths.battles_csvs:
-        print(f"  Loading: {csv_path.name}", end="", flush=True)
+        name = getattr(csv_path, "name", None) or str(csv_path).split("/")[-1]
+        print(f"  Loading: {name}", end="", flush=True)
         df = pd.read_csv(csv_path, low_memory=low_memory, usecols=usecols, dtype=dtype)
         original_len = len(df)
         total_rows_original += original_len
@@ -296,7 +315,8 @@ def load_raw(
     else:
         print(f"Total battles: {len(battles_df):,} rows")
 
-    print(f"\nLoading: {paths.cards_csv.name}")
+    cards_name = getattr(paths.cards_csv, "name", None) or str(paths.cards_csv).split("/")[-1]
+    print(f"\nLoading: {cards_name}")
     cards = pd.read_csv(paths.cards_csv)
     print(f"Shape: {cards.shape}")
 
@@ -316,6 +336,7 @@ def get_raw_data(
     quick: bool = False,
     sample: Optional[float] = None,
     random_state: int = 42,
+    gcs_direct: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, DatasetPaths]:
     """Obtain raw DataFrames and resolved paths, downloading if needed.
 
@@ -356,15 +377,91 @@ def get_raw_data(
         print("Full mode: loading ALL battle files (~21GB)")
     
     if use_local is not None:
-        base = Path(use_local).expanduser().resolve()
-        print(f"Using local dataset directory: {base}")
+        use_local_str = str(use_local)
+        # Option A: Direct read from GCS using gcsfs/pandas (no local download)
+        if use_local_str.startswith("gs://") and gcs_direct:
+            print(f"Using GCS dataset root (direct read): {use_local_str}")
+            from google.cloud import storage
+
+            bucket_name, prefix = _parse_gs_uri(use_local_str)
+            client = storage.Client()
+
+            # Ensure prefix ends with slash for consistent relative names
+            if prefix and not prefix.endswith("/"):
+                prefix = prefix + "/"
+
+            # Collect battle CSVs and card file as gs:// URIs
+            battles = []
+            cards_uri = None
+            for blob in client.list_blobs(bucket_name, prefix=prefix):
+                name = blob.name[len(prefix):] if prefix else blob.name
+                if not name:
+                    continue
+                lower = name.lower()
+                if lower.endswith(".csv") and "wl_tagged" in lower:
+                    battles.append(f"gs://{bucket_name}/{blob.name}")
+                if name.endswith(DEFAULT_CARDS_FILE):
+                    cards_uri = f"gs://{bucket_name}/{blob.name}"
+
+            if not battles:
+                raise FileNotFoundError(f"No battle CSVs found at {use_local_str}")
+            if cards_uri is None:
+                raise FileNotFoundError(f"Card master list {DEFAULT_CARDS_FILE} not found under {use_local_str}")
+
+            paths = DatasetPaths(base_dir=use_local_str, battles_csvs=battles, cards_csv=cards_uri)
+
+        # Option B: Download GCS prefix to a local tempdir (preserve existing behavior)
+        elif use_local_str.startswith("gs://"):
+            print(f"Using GCS dataset root: {use_local_str} — downloading to temporary directory...")
+            from google.cloud import storage
+            import tempfile
+
+            bucket_name, prefix = _parse_gs_uri(use_local_str)
+            client = storage.Client()
+
+            # Create temp dir where objects will be downloaded
+            tmpdir = Path(tempfile.mkdtemp(prefix="cr_dataset_"))
+            print(f"  Temporary dataset dir: {tmpdir}")
+
+            # Ensure prefix ends with slash for accurate relative paths
+            if prefix and not prefix.endswith("/"):
+                prefix = prefix + "/"
+
+            blobs = client.list_blobs(bucket_name, prefix=prefix)
+            found = False
+            for blob in blobs:
+                # Compute relative path under the prefix
+                rel_path = blob.name[len(prefix):] if prefix else blob.name
+                if rel_path == "":
+                    # skip placeholder
+                    continue
+                found = True
+                local_path = tmpdir / rel_path
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                print(f"  Downloading: {blob.name} -> {local_path}")
+                blob.download_to_filename(str(local_path))
+
+            if not found:
+                raise FileNotFoundError(f"No objects found at {use_local_str}")
+
+            base = tmpdir
+            paths = resolve_paths(base, quick=quick)
+
+        else:
+            base = Path(use_local).expanduser().resolve()
+            print(f"Using local dataset directory: {base}")
+            paths = resolve_paths(base, quick=quick)
     else:
         base = dataset_download(handle, force_download=force_download, cache_dir=cache_dir)
+        paths = resolve_paths(base, quick=quick)
 
-    paths = resolve_paths(base, quick=quick)
-    
-    # Friendly hint if files are missing / the structure changed
-    if not paths.exists():
+    # Friendly hint if files are missing / the structure changed (skip when direct GCS)
+    try:
+        gs_direct_check = isinstance(paths.cards_csv, str) and str(paths.cards_csv).startswith("gs://")
+    except Exception:
+        gs_direct_check = False
+
+    if not gs_direct_check and not paths.exists():
         print("\n[Hint] CSVs not found at expected locations. Here's a quick directory peek:")
         for p in list_csvs(base, limit=50):
             print("  -", p.relative_to(base))
