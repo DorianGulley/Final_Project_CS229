@@ -157,8 +157,8 @@ def parse_args() -> argparse.Namespace:
         default=["deck", "ab", "delta"],
         help="Feature blocks to include (subset/order of: deck ab delta levels).",
     )
-    p.add_argument("--train-frac", type=float, default=0.70, help="Train fraction (default 0.70).")
-    p.add_argument("--val-frac", type=float, default=0.15, help="Validation fraction (default 0.15).")
+    p.add_argument("--train-frac", type=float, default=0.80, help="Train fraction (default 0.80).")
+    p.add_argument("--val-frac", type=float, default=0.10, help="Validation fraction (default 0.10).")
 
     # Model options
     p.add_argument("--model", default="logreg", help="Model name (default 'logreg').")

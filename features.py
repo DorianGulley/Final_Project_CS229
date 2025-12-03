@@ -9,7 +9,7 @@
 #
 # Public API
 #   - build_feature_maps(cards_df)
-#   - make_splits(daydf, train_frac=0.70, val_frac=0.15)
+#   - make_splits(daydf, train_frac=0.80, val_frac=0.10)
 #   - build_split(split_df, maps, win_cols, los_cols)
 #   - standardize_delta(train_delta, val_delta, test_delta)
 #   - assemble_blocks(blocks, use=("deck","ab","delta"))
@@ -164,7 +164,7 @@ def build_feature_maps(cards_df: pd.DataFrame, card_id_col: str = "team.card1.id
 # Split construction (time-respecting by index)
 # --------------------------------------------------------------------------------------
 
-def make_splits(daydf: pd.DataFrame, *, train_frac: float = 0.70, val_frac: float = 0.15) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def make_splits(daydf: pd.DataFrame, *, train_frac: float = 0.80, val_frac: float = 0.10) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Split chronologically by index into train/val/test without shuffling.
 
     Assumes `daydf` is time-sorted upstream (dataset source is ordered). This keeps
@@ -439,8 +439,8 @@ def build_all_features(
     cards_df: pd.DataFrame,
     *,
     card_id_col: str = "team.card1.id",
-    train_frac: float = 0.70,
-    val_frac: float = 0.15,
+    train_frac: float = 0.80,
+    val_frac: float = 0.10,
     use_blocks: Sequence[str] = ("deck", "ab", "delta"),
     chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> AssembledDataset:
