@@ -1,31 +1,5 @@
 # data.py
-# --------------------------------------------------------------------------------------
-# Purpose
-#   Centralize dataset access for the Clash Royale S18 project.
-#   - Downloads (and caches) the Kaggle dataset via kagglehub
-#   - Resolves expected file paths
-#   - Loads the raw CSVs into pandas DataFrames (ALL battle files by default)
-#   - Provides small utilities for introspection/debugging
-#
-# Why this exists
-#   We want training/evaluation code to be model-pluggable. Moving I/O concerns here keeps
-#   other modules (features, models, train) focused on their responsibilities.
-#
-# Usage (quick start)
-#   from data import get_raw_data
-#   daydf, cards, paths = get_raw_data()           # loads ALL battle files (~21GB)
-#   daydf, cards, paths = get_raw_data(quick=True) # loads only Dec 27 (~1GB, faster)
-#
-#   # If you already have the dataset locally (no download):
-#   daydf, cards, paths = get_raw_data(use_local="/path/to/dataset/root")
-#
-#   # If you want to force a fresh pull of the cached dataset:
-#   daydf, cards, paths = get_raw_data(force_download=True)
-#
-# Notes
-#   - kagglehub caches under ~/.cache/kagglehub by default (configurable via KAGGLEHUB_CACHE).
-#   - This module does *not* perform feature engineering or splitting. See features.py / datasets.py.
-# --------------------------------------------------------------------------------------
+# Purpose: Dataset I/O and helpers (download, resolve paths, and load raw CSVs).
 
 from __future__ import annotations
 
@@ -56,13 +30,15 @@ QUICK_BATTLES_FILE = "battlesStaging_12272020_WL_tagged.csv"
 # Card master list
 DEFAULT_CARDS_FILE = "CardMasterListSeason18_12082020.csv"
 
-# Columns we actually need (only 18 out of 50+)
+# Columns we actually need (extended to include levels)
 REQUIRED_COLUMNS = [
     "winner.card1.id", "winner.card2.id", "winner.card3.id", "winner.card4.id",
     "winner.card5.id", "winner.card6.id", "winner.card7.id", "winner.card8.id",
     "loser.card1.id", "loser.card2.id", "loser.card3.id", "loser.card4.id",
     "loser.card5.id", "loser.card6.id", "loser.card7.id", "loser.card8.id",
     "winner.startingTrophies", "loser.startingTrophies",
+    # Card levels (total sum of all 8 card levels per player)
+    "winner.totalcard.level", "loser.totalcard.level",
 ]
 
 # --------------------------------------------------------------------------------------
@@ -202,12 +178,10 @@ def resolve_paths(
         Immutable container with resolved file paths.
     """
     cards_csv = base_dir / cards_file
-    
     if quick:
-        # Single-day mode: just Dec 27, 2020
+        # Local/KaggleHub layout: file lives in a subdirectory
         battles_csvs = [base_dir / QUICK_BATTLES_SUBDIR / QUICK_BATTLES_FILE]
     else:
-        # Full mode: all battle files
         battles_csvs = discover_battle_csvs(base_dir)
     
     return DatasetPaths(base_dir=base_dir, battles_csvs=battles_csvs, cards_csv=cards_csv)
@@ -393,15 +367,35 @@ def get_raw_data(
             # Collect battle CSVs and card file as gs:// URIs
             battles = []
             cards_uri = None
-            for blob in client.list_blobs(bucket_name, prefix=prefix):
-                name = blob.name[len(prefix):] if prefix else blob.name
-                if not name:
-                    continue
-                lower = name.lower()
-                if lower.endswith(".csv") and "wl_tagged" in lower:
-                    battles.append(f"gs://{bucket_name}/{blob.name}")
-                if name.endswith(DEFAULT_CARDS_FILE):
-                    cards_uri = f"gs://{bucket_name}/{blob.name}"
+            bucket = client.bucket(bucket_name)
+
+            # If quick mode is requested, try to directly reference the single-day CSV
+            if quick:
+                # Just the single CSV under the prefix root
+                quick_rel = (prefix + QUICK_BATTLES_FILE) if prefix else QUICK_BATTLES_FILE
+                quick_blob = bucket.blob(quick_rel)
+                if quick_blob.exists(client=client):
+                    battles = [f"gs://{bucket_name}/{quick_rel}"]
+                else:
+                    battles = []
+
+            if not battles:
+                # List blobs and collect matching CSVs and card file
+                for blob in client.list_blobs(bucket_name, prefix=prefix):
+                    name = blob.name[len(prefix):] if prefix else blob.name
+                    if not name:
+                        continue
+                    lower = name.lower()
+                    if lower.endswith(".csv") and "wl_tagged" in lower:
+                        battles.append(f"gs://{bucket_name}/{blob.name}")
+                    if name.endswith(DEFAULT_CARDS_FILE):
+                        cards_uri = f"gs://{bucket_name}/{blob.name}"
+
+            # If we didn't already locate cards_uri above, try a direct path under prefix
+            if cards_uri is None:
+                candidate = (prefix + DEFAULT_CARDS_FILE) if prefix else DEFAULT_CARDS_FILE
+                if bucket.blob(candidate).exists(client=client):
+                    cards_uri = f"gs://{bucket_name}/{candidate}"
 
             if not battles:
                 raise FileNotFoundError(f"No battle CSVs found at {use_local_str}")
@@ -444,7 +438,20 @@ def get_raw_data(
             if not found:
                 raise FileNotFoundError(f"No objects found at {use_local_str}")
 
-            base = tmpdir
+            # If we downloaded a GCS prefix, the blobs may have been written
+            # under a subdirectory matching that prefix (e.g., tmpdir/20/...).
+            # Set `base` to that subdirectory when available so resolve_paths()
+            # finds the expected files (cards CSV and battle files).
+            prefix_clean = prefix.rstrip("/") if prefix else ""
+            if prefix_clean:
+                candidate = tmpdir / prefix_clean
+                if candidate.exists():
+                    base = candidate
+                else:
+                    base = tmpdir
+            else:
+                base = tmpdir
+
             paths = resolve_paths(base, quick=quick)
 
         else:

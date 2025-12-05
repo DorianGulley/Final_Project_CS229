@@ -1,17 +1,5 @@
 # metrics.py
-# --------------------------------------------------------------------------------------
-# Purpose
-#   Centralized evaluation utilities for binary classifiers in the Clash Royale S18 project.
-#   - Computes common metrics on probabilities (ROC-AUC, LogLoss, Brier, Accuracy@τ)
-#   - Lightweight pretty printer and optional confusion-matrix helper
-#   - Returns a serializable dict for saving experiment reports
-#
-# Usage
-#   from metrics import evaluate, pretty_print, confusion
-#   m = evaluate(y_val, p_val, threshold=0.5)
-#   pretty_print(m)
-#   tn, fp, fn, tp = confusion(y_val, p_val, threshold=0.5)
-# --------------------------------------------------------------------------------------
+# Purpose: Evaluation utilities for binary classifiers (ROC-AUC, logloss, brier, accuracy).
 
 from __future__ import annotations
 

@@ -1,23 +1,5 @@
 # models/adaboost.py
-# --------------------------------------------------------------------------------------
-# Purpose
-#   Wrap scikit-learn AdaBoost (with decision trees) behind the same adapter API used by
-#   other models. This enables easy, name-based switching in train.py.
-#
-# Notes
-#   - We default to AdaBoostClassifier with DecisionTreeClassifier(base_depth=3) and the
-#     probabilistic variant 'SAMME.R'.
-#   - scikit-learn's tree-based models generally expect dense inputs. This adapter sets
-#     `requires_dense=True` and will convert CSR to dense in `fit()` / `predict_proba()`.
-#     If your feature matrices are very large, consider feature preselection or using
-#     XGBoost/LightGBM which handle sparse more efficiently.
-#
-# Example
-#   from models.adaboost import AdaBoostAdapter
-#   model = AdaBoostAdapter(n_estimators=200, learning_rate=0.1, max_depth=3)
-#   model.fit(X_train, y_train)
-#   p_val = model.predict_proba(X_val)[:, 1]
-# --------------------------------------------------------------------------------------
+# Purpose: Adapter wrapping scikit-learn's AdaBoostClassifier (uses shallow trees).
 
 from __future__ import annotations
 
@@ -32,21 +14,7 @@ from sklearn.tree import DecisionTreeClassifier
 
 @dataclass
 class AdaBoostAdapter:
-    """AdaBoost (SAMME.R) adapter with shallow trees.
-
-    Parameters
-    ----------
-    n_estimators : int
-        Number of boosting rounds (default 200).
-    learning_rate : float
-        Shrinkage applied to each weak learner (default 0.1).
-    max_depth : int
-        Depth of the decision tree base learner (default 3).
-    algorithm : str
-        'SAMME.R' (real boosting, probabilistic) or 'SAMME' (discrete). Default 'SAMME.R'.
-    random_state : Optional[int]
-        RNG seed for reproducibility.
-    """
+    """AdaBoost adapter (shallow decision-tree base learners)."""
 
     n_estimators: int = 200
     learning_rate: float = 0.1

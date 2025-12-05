@@ -1,7 +1,7 @@
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.2
 aiosignal==1.4.0
-altgraph @ file:///AppleInternal/Library/BuildRoots/4~CAP1ugDqYZ2ZVF_54thwSWnK-8L4LO5_Zcx-VcI/Library/Caches/com.apple.xbs/Sources/python3/altgraph-0.17.2-py2.py3-none-any.whl
+altgraph==0.17.2
 async-timeout==5.0.1
 attrs==25.4.0
 cachetools==6.2.2
@@ -10,7 +10,7 @@ charset-normalizer==3.4.4
 decorator==5.2.1
 frozenlist==1.8.0
 fsspec==2025.10.0
-future @ file:///AppleInternal/Library/BuildRoots/4~CAP1ugDqYZ2ZVF_54thwSWnK-8L4LO5_Zcx-VcI/Library/Caches/com.apple.xbs/Sources/python3/future-0.18.2-py3-none-any.whl
+future==0.18.2
 gcsfs==2025.10.0
 google-api-core==2.28.1
 google-auth==2.41.1
@@ -21,7 +21,7 @@ google-crc32c==1.7.1
 google-resumable-media==2.8.0
 googleapis-common-protos==1.72.0
 idna==3.11
-macholib @ file:///AppleInternal/Library/BuildRoots/4~CAP1ugDqYZ2ZVF_54thwSWnK-8L4LO5_Zcx-VcI/Library/Caches/com.apple.xbs/Sources/python3/macholib-1.15.2-py2.py3-none-any.whl
+macholib==1.15.2
 multidict==6.7.0
 oauthlib==3.3.1
 propcache==0.4.1
@@ -32,7 +32,19 @@ pyasn1_modules==0.4.2
 requests==2.32.5
 requests-oauthlib==2.0.0
 rsa==4.9.1
-six @ file:///AppleInternal/Library/BuildRoots/4~CAP1ugDqYZ2ZVF_54thwSWnK-8L4LO5_Zcx-VcI/Library/Caches/com.apple.xbs/Sources/python3/six-1.15.0-py2.py3-none-any.whl
+six==1.15.0
 typing_extensions==4.15.0
 urllib3==2.5.0
 yarl==1.22.0
+
+# Data & dataset utilities
+pandas>=2.2.0,<3
+# Optional helper for downloading from Kaggle (used by `data.py` if you call dataset_download())
+kagglehub>=0.3.0
+
+# Core numerical & ML libraries (ensure container has these)
+numpy>=1.25.0,<2
+scipy>=1.11.0,<2
+scikit-learn>=1.3.2,<2
+matplotlib>=3.8.0,<4
+xgboost>=2.0.0,<3

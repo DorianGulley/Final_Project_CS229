@@ -1,10 +1,5 @@
 # models/__init__.py
-# --------------------------------------------------------------------------------------
-# Purpose
-#   Central model registry and convenience imports for adapters.
-#   Allows dynamic model selection by name (e.g., 'logreg', 'adaboost', 'xgb').
-#   Keeps a consistent interface: fit(), predict_proba(), predict().
-# --------------------------------------------------------------------------------------
+# Purpose: Central model registry and convenience imports for model adapters.
 
 from typing import Dict, Type
 
@@ -14,6 +9,7 @@ from models.logreg import LogRegAdapter
 # Optional future imports (placeholders for extensibility)
 from models.adaboost import AdaBoostAdapter
 from models.xgb import XGBAdapter
+from models.nn import NNAdapter
 
 # --------------------------------------------------------------------------------------
 # Registry
@@ -23,6 +19,7 @@ MODEL_REGISTRY: Dict[str, Type] = {
     "logreg": LogRegAdapter,
     "adaboost": AdaBoostAdapter,
     "xgb": XGBAdapter,
+    "nn": NNAdapter,
 }
 
 # --------------------------------------------------------------------------------------
@@ -30,25 +27,7 @@ MODEL_REGISTRY: Dict[str, Type] = {
 # --------------------------------------------------------------------------------------
 
 def get_model(name: str, **kwargs):
-    """Instantiate a model adapter by name.
-
-    Parameters
-    ----------
-    name : str
-        Model key (e.g., 'logreg').
-    **kwargs
-        Extra parameters forwarded to the adapter constructor.
-
-    Returns
-    -------
-    object
-        Instantiated model adapter.
-
-    Raises
-    ------
-    KeyError
-        If name is not found in MODEL_REGISTRY.
-    """
+    """Instantiate a model adapter by name. Extra kwargs are forwarded to the adapter."""
     key = name.lower()
     if key not in MODEL_REGISTRY:
         raise KeyError(f"Unknown model '{name}'. Available: {list(MODEL_REGISTRY)}")

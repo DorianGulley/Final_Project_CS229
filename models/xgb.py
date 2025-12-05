@@ -1,23 +1,5 @@
 # models/xgb.py
-# --------------------------------------------------------------------------------------
-# Purpose
-#   Wrap XGBoost's XGBClassifier behind the same adapter API as other models so it can be
-#   selected by name. XGBoost natively supports SciPy CSR matrices (sparse-friendly),
-#   which makes it a good fit for large, sparse feature sets like [deck | ab | delta].
-#
-# Defaults
-#   - objective="binary:logistic", booster="gbtree", tree_method="hist"
-#   - max_depth=6, n_estimators=500, learning_rate=0.1
-#   - subsample=0.8, colsample_bytree=0.5, reg_lambda=1.0, reg_alpha=0.0
-#   - n_jobs=-1, random_state=42
-#   - early stopping optional via fit(..., X_val=..., y_val=..., early_stopping_rounds=50)
-#
-# Example
-#   from models.xgb import XGBAdapter
-#   model = XGBAdapter(max_depth=6, n_estimators=500, learning_rate=0.1)
-#   model.fit(X_train, y_train, X_val=X_val, y_val=y_val, early_stopping_rounds=50)
-#   p_val = model.predict_proba(X_val)[:, 1]
-# --------------------------------------------------------------------------------------
+# Purpose: Adapter wrapping XGBoost's XGBClassifier for use in train.py and evaluation.
 
 from __future__ import annotations
 
@@ -30,38 +12,7 @@ import xgboost as xgb
 
 @dataclass
 class XGBAdapter:
-    """XGBoost gradient-boosted trees adapter (sparse-friendly).
-
-    Parameters
-    ----------
-    max_depth : int
-        Maximum tree depth (default 6).
-    n_estimators : int
-        Number of boosting rounds (default 500). If using early stopping, the
-        effective best_iteration_ may be smaller.
-    learning_rate : float
-        Shrinkage factor (eta) (default 0.1).
-    subsample : float
-        Row subsampling per tree (default 0.8).
-    colsample_bytree : float
-        Column subsampling per tree (default 0.5).
-    reg_lambda : float
-        L2 regularization term on weights (default 1.0).
-    reg_alpha : float
-        L1 regularization term on weights (default 0.0).
-    min_child_weight : float
-        Minimum sum of instance weight needed in a child (default 1.0).
-    gamma : float
-        Minimum loss reduction to make a further partition (default 0.0).
-    n_jobs : int
-        Threads to use (default -1 for all cores).
-    random_state : Optional[int]
-        RNG seed for reproducibility (default 42).
-    tree_method : str
-        Tree construction algorithm (default 'hist'). Consider 'gpu_hist' if GPU is available.
-    importance_type : str
-        Importance type for feature_importances_ (default 'gain').
-    """
+    """XGBoost adapter providing fit/predict_proba/predict and XGBoost-specific helpers."""
 
     max_depth: int = 6
     n_estimators: int = 500
