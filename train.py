@@ -216,8 +216,24 @@ def plot_loss_curve(
         print("Warning: matplotlib not installed. Skipping loss plot.")
         return
     
+    def _as_list(x):
+        return list(x) if x is not None else []
+
+    val_history = None
+    # Allow caller to pass either (loss_history) or (loss_history, val_history)
+    if isinstance(loss_history, tuple) or isinstance(loss_history, list) and len(loss_history) == 2 and hasattr(loss_history[0], '__iter__') and hasattr(loss_history[1], '__iter__'):
+        # support calling plot_loss_curve((train, val), ...)
+        train_history, val_history = loss_history[0], loss_history[1]
+    else:
+        train_history = loss_history
+
+    train_history = _as_list(train_history)
+    val_history = _as_list(val_history)
+
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(loss_history, linewidth=2, label="Loss")
+    ax.plot(train_history, linewidth=2, label="Train Loss")
+    if val_history:
+        ax.plot(val_history, linewidth=2, label="Val Loss")
     ax.set_xlabel("Epoch / Iteration")
     ax.set_ylabel("Loss")
     ax.set_title(f"Training Loss Curve — {model_name}")
@@ -430,17 +446,17 @@ def main(args: argparse.Namespace) -> None:
 
     # 4) Fit on TRAIN and capture loss history if available
     loss_history = None
+    val_loss_history = None
     if args.model.lower() == "nn":
-        # Neural Network: capture loss during training
-        model.fit(ds.X_train, ds.y_train)
-        # sklearn MLPClassifier:
-        # - loss_curve_: list of loss values per iteration (what we want to plot)
-        # - loss_: final loss (scalar)
+        # Neural Network: capture train+val loss during epoch-by-epoch training
+        model.fit(ds.X_train, ds.y_train, eval_set=(ds.X_val, ds.y_val))
+        # Adapter exposes loss_curve_ and val_loss_curve_ when eval_set provided
         if hasattr(model, "loss_curve_") and model.loss_curve_:
             loss_history = model.loss_curve_
         elif hasattr(model, "loss_"):
-            # Fall back to a single-point "curve"
             loss_history = [model.loss_]
+        if hasattr(model, "val_loss_curve_") and model.val_loss_curve_:
+            val_loss_history = model.val_loss_curve_
 
     elif args.model.lower() in {"xgb", "xgboost"}:
         # XGBoost: use eval_set to track loss during training
@@ -455,9 +471,11 @@ def main(args: argparse.Namespace) -> None:
             evals = model.evals_result_
             if 'validation_0' in evals and 'logloss' in evals['validation_0']:
                 loss_history = evals['validation_0']['logloss']
+                val_loss_history = loss_history
     else:
         # LogReg, AdaBoost: no loss history available
         model.fit(ds.X_train, ds.y_train)
+        val_loss_history = None
 
     # 5) Evaluate on TRAIN and VAL
     print("\n=== Train Metrics ===")
@@ -472,7 +490,8 @@ def main(args: argparse.Namespace) -> None:
 
     # Plot loss curve if available and requested
     if args.plot_loss and loss_history is not None:
-        plot_loss_curve(loss_history, args.plot_loss, args.model)
+        # pass both train and val curves (val may be None)
+        plot_loss_curve((loss_history, val_loss_history), args.plot_loss, args.model)
     elif args.plot_loss and loss_history is None:
         print(f"\nWarning: No loss history available for model '{args.model}'. Skipping plot.")
 
